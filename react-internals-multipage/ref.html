@@ -91,6 +91,8 @@
 
   <h2><span class="dot" style="background:var(--render)"></span>ref 属性:什么时候被赋值</h2>
   <p><code>&lt;div ref={myRef}&gt;</code> 里的 <code>myRef.current</code> 不是渲染时赋值的,而是在 <b>Commit 的 Layout 阶段</b>由 React 设置:<code>commitAttachRef</code> 把真实 DOM 赋给 <code>ref.current</code>;卸载或 ref 变化时先 <code>commitDetachRef</code> 置为 <code>null</code>。顺序是<b>先卸旧 ref(=null)、再挂新 ref</b>。所以在 <code>useLayoutEffect</code> 里能拿到 ref,在渲染函数体里拿到的还是上一次的(或 null)。</p>
+  <div class="phase-strip"><div><strong>Render</strong>比较新旧 ref，给 Fiber 标记 Ref flag；不碰 DOM。</div><div><strong>Mutation</strong>旧 ref 在删除或替换时被解除。</div><div><strong>Layout</strong>新 DOM/实例写入对象 ref 或传给回调 ref，然后布局 Effect 可读取。</div></div>
+  <div class="callout warn"><b>不要在 Render 中读写 ref.current 来决定 UI。</b>并发 Render 可能暂停或丢弃，Render 也必须保持纯。例外是可预测的惰性初始化模式；真正的 DOM 读写放在事件或 Layout Effect 中。</div>
 
   <h2><span class="dot" style="background:var(--sched)"></span>回调 ref / forwardRef / useImperativeHandle</h2>
   <ul class="clean">
@@ -103,6 +105,9 @@
 <span class="fn">useImperativeHandle</span>(ref, () =&gt; ({
   focus(){ inputRef.current.<span class="fn">focus</span>(); }
 }), []);</pre>
+  <h3>回调 ref 为什么经常重复执行</h3>
+  <p>内联 <code>ref={node =&gt; ...}</code> 每次 Render 都产生新函数。React 会把它视为 ref 发生变化，先清理旧回调，再调用新回调。若回调里有昂贵逻辑，应使用稳定函数；但普通对象 ref 通常更直接。</p>
+  <table class="simple"><tr><th>需求</th><th>选择</th></tr><tr><td>值会影响页面显示</td><td><code>useState</code></td></tr><tr><td>跨 Render 保存但不驱动 UI</td><td><code>useRef</code></td></tr><tr><td>挂载后测量 DOM、同步布局</td><td>DOM ref + <code>useLayoutEffect</code></td></tr><tr><td>对子组件暴露少量命令</td><td><code>useImperativeHandle</code></td></tr></table>
   <div class="callout good"><b>本章小结：</b>useRef 存一个 {current} 对象、每次渲染返回同一个(改它不重渲染);ref 在 commit 的 layout 阶段赋值;React 19 起 ref 可直接作 prop。→ 最后:<a class="xref" data-go="main">更新流程总览</a>,把整条线串起来。</div>
   <div class="navbtns"><button class="ghost" data-go="ctx">← C1Context 源码原理</button><button class="act" data-go="pk">A1宏观包结构 →</button></div>
 </section></main>

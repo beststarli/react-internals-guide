@@ -79,21 +79,25 @@
 
   <h2><span class="dot" style="background:var(--render)"></span>Error Boundary(错误边界)</h2>
   <p>类组件通过 <code>getDerivedStateFromError</code> / <code>componentDidCatch</code> 捕获子树渲染错误,展示兜底 UI(函数组件目前无等价 Hook,需用类或库)。<b>注意:</b>它捕获不到事件处理器、异步代码、SSR 里的错误。</p>
+  <p>它是错误版的“子树恢复点”：Render 抛错后 React 沿 Fiber return 链寻找最近边界，安排捕获更新并重新 Render fallback。边界宜按可独立恢复的产品区域划分，避免一个局部错误让整页消失。</p>
 
   <h2><span class="dot" style="background:var(--accent)"></span>Portal 与 forwardRef / useImperativeHandle</h2>
   <ul class="clean">
     <li><b><code>createPortal(child, domNode)</code>:</b>把子节点渲染到<b>父 DOM 层级之外</b>(如挂到 body),但<b>事件仍沿 React 树冒泡</b>(合成事件按 fiber 树,不按真实 DOM)。适合弹窗、tooltip。</li>
     <li><b><code>useImperativeHandle</code>:</b>配合 ref 暴露<b>受控的命令式接口</b>(如 <code>inputRef.current.focus()</code>),而不是整个 DOM。React 19 起 ref 可直接作 prop,forwardRef 不再必需。</li>
   </ul>
+  <div class="callout"><b>Portal 要同时看两棵树：</b>它只改变 Host DOM 的挂载位置，不改变 Fiber 父子关系。Context、错误边界和合成事件按 React 树工作；CSS、原生事件路径和焦点按 DOM 树工作。</div>
 
   <h2><span class="dot" style="background:var(--sched)"></span>StrictMode 双调用</h2>
   <p>开发模式下 <code>&lt;StrictMode&gt;</code> 会<b>故意双调用</b>渲染函数、以及 effect 的「挂载→卸载→再挂载」。目的:<b>暴露不纯的渲染和缺失的 effect 清理</b>。如果你的组件双调用后出 bug,说明它有副作用不纯 —— 也正是 React Compiler 能否优化它的分界线。<b>生产环境不会双调用。</b></p>
+  <p>正确修复不是用 ref 阻止第二次 Effect，而是让 setup/cleanup 对称：连接要断开、订阅要取消、请求要中止或忽略过期结果。这样真实卸载和路由切换时也安全。</p>
 
   <h2><span class="dot" style="background:var(--fiber)"></span>Context 性能陷阱</h2>
   <p>Context value 一变,<b>所有消费者都重渲染</b>(绕过 memo)。陷阱:把频繁变化的值和稳定的值放同一个 Provider,或每次渲染传<b>新对象字面量</b>作 value。优化:<b>拆分 Context</b>(变与不变分开)、value 用 <code>useMemo</code> 稳定、或用 <code>useSyncExternalStore</code>/状态库做<b>选择性订阅</b>。</p>
 
   <h2><span class="dot" style="background:var(--recon)"></span>useId</h2>
   <p><code>useId()</code> 生成<b>服务端/客户端一致</b>的唯一 id,专为解决 SSR hydration 中 id 不匹配(不能用随机数/递增计数)。用于 <code>aria-*</code>、label/input 关联等。</p>
+  <div class="callout warn"><b>useId 不能作为列表 key。</b>key 来自数据身份；useId 来自组件在 React 树中的位置，解决的是同构 HTML 的可访问性关联。</div>
   <div class="callout good"><b>本章小结：</b>Error Boundary 捕获子树渲染错误(捕不到事件/异步);Portal 渲染到别处但事件仍沿 fiber 树;StrictMode 开发双调用暴露不纯;Context value 一变所有消费者更新,要拆分/稳定 value。→ 下一章:<a class="xref" data-go="t28">第七层·性能诊断</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t26">← 26React Compiler</button><button class="act" data-go="t28">28性能诊断与工程化 →</button></div>
 </section></main>

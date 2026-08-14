@@ -3,6 +3,7 @@
 </p>
 
 # React 原理全景（React Internals Guide）
+本仓库是对作者[赵莹儿](https://github.com/zhaoyinger623)的仓库[react-internals-guide](https://github.com/zhaoyinger623/react-internals-guide)教程的续写。
 
 一份用图解、动画和源码示例讲清 React 工作原理的中文教程。你将从一次 `setState` 开始，逐步理解 React 如何记录状态变化、安排更新、执行组件、比较页面差异，并最终把新界面显示到屏幕上。
 

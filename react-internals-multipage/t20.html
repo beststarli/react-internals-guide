@@ -96,6 +96,27 @@
   <p>只比 props 第一层。所以传<b>新建的对象/数组/函数</b>(每次渲染引用都变)会让 memo 失效 —— 这正是要配 <code>useMemo/useCallback</code> 稳定引用的原因。深层嵌套对象浅比较也测不出,需自定义 <code>areEqual</code>。</p>
   <h2><span class="dot" style="background:var(--fiber)"></span>如何做到精准局部更新</h2>
   <p>state 定义得越靠近使用它的组件,重渲染范围越小(状态下放)。配合 <code>childLanes</code> 的 bailout,只有"从 root 到发生更新的 fiber"这条路径 + 其必要子树会被 beginWork,兄弟子树整体跳过。</p>
+  <h2><span class="dot" style="background:var(--sched)"></span>先分清三种“性能成本”</h2>
+  <table class="simple">
+    <tr><th>成本</th><th>发生位置</th><th>常用手段</th></tr>
+    <tr><td>组件执行</td><td>Render 调用函数组件、计算 JSX</td><td>状态下放、组合 children、必要时 memo</td></tr>
+    <tr><td>协调比较</td><td>Reconciler 比较 element 与 Fiber</td><td>稳定类型与 key，缩小更新子树</td></tr>
+    <tr><td>宿主提交</td><td>Commit 修改 DOM、布局和绘制</td><td>减少 DOM 规模、虚拟列表、避免布局抖动</td></tr>
+  </table>
+  <p>“组件重新执行”不等于“DOM 一定更新”。React 可能执行组件并完成 Diff，最后发现没有任何 Host flag；反过来，一个很小的组件也可能触发昂贵布局。因此优化前要先用 Profiler 判断瓶颈在哪一层。</p>
+  <h3>memo、useMemo、useCallback 各缓存什么</h3>
+  <ul class="clean">
+    <li><code>memo(Component)</code> 缓存的是“是否需要重新执行这个组件”的判断。</li>
+    <li><code>useMemo(factory, deps)</code> 缓存一次计算结果，不能保证永远保留，语义上不应依赖它保证正确性。</li>
+    <li><code>useCallback(fn, deps)</code> 等价于缓存函数引用，主要用于把稳定回调传给 memo 子组件或作为其他 Hook 依赖。</li>
+  </ul>
+  <pre><span class="kw">const</span> Row = <span class="fn">memo</span>(<span class="kw">function</span> Row({ item, onSelect }) { … });
+
+<span class="kw">function</span> List({ items }) {
+  <span class="kw">const</span> onSelect = <span class="fn">useCallback</span>(id =&gt; <span class="fn">setSelected</span>(id), []);
+  <span class="kw">return</span> items.<span class="fn">map</span>(item =&gt; &lt;Row key={item.id} item={item} onSelect={onSelect} /&gt;);
+}</pre>
+  <div class="callout warn"><b>优化顺序：</b>先避免不必要的状态提升和 Effect 链式更新，再测量热点，最后才给热点建立稳定引用。到处添加 memo 会增加比较、依赖维护和阅读成本，也可能完全没有收益。</div>
   <div class="callout good"><b>本章小结：</b>bailout = props 引用没变 + 无自身更新 + context 没变 → 复用旧子树,<code>childLanes</code> 为 0 还能整棵跳过;memo 只浅比较第一层,传新建对象/函数会失效,要配 useMemo/useCallback。→ 下一章:<a class="xref" data-go="t21">第六层·渲染 bug</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t19">← 19合成事件系统</button><button class="act" data-go="t21">21渲染 bug 底层解释 →</button></div>
 </section></main>

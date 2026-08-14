@@ -79,6 +79,19 @@
   </div>
   <h2><span class="dot" style="background:var(--render)"></span>事件委托</h2>
   <p>React 不给每个元素绑监听器,而是<b>把所有事件统一委托到根容器</b>(React 17+ 是 <code>createRoot</code> 的 container,16 是 document)。DOM 节点上挂 <code>__reactFiber$xxx</code> 指回 fiber,事件触发时反查目标 fiber,再<b>沿 fiber 树的 return 链模拟捕获/冒泡</b>,派发归一化的 <b>SyntheticEvent</b>。</p>
+  <div class="phase-strip">
+    <div><strong>收集</strong>根容器收到原生事件，定位 target 对应的 Fiber。</div>
+    <div><strong>构造</strong>插件系统提取 SyntheticEvent，并沿 Fiber return 链收集监听器。</div>
+    <div><strong>派发</strong>先捕获、后冒泡执行；事件类型同时决定更新优先级。</div>
+  </div>
+  <h2><span class="dot" style="background:var(--accent)"></span>事件优先级怎样接到 Lane</h2>
+  <table class="simple">
+    <tr><th>事件类别</th><th>例子</th><th>调度含义</th></tr>
+    <tr><td>离散事件</td><td>click、keydown</td><td>用户期待立即反馈，通常映射到最高的同步更新优先级</td></tr>
+    <tr><td>连续事件</td><td>mousemove、scroll</td><td>连续产生，可被更新的样本覆盖，优先级低于离散事件</td></tr>
+    <tr><td>默认事件</td><td>其他普通回调</td><td>使用默认更新优先级</td></tr>
+  </table>
+  <p>派发前 React 设置当前 update priority，处理器里的 setState 再由 <code>requestUpdateLane</code> 读取它。于是本章补上了前文 Lane 的“来源”：<b>不是 Scheduler 猜测用户意图，而是事件系统先把交互语义转换成更新优先级。</b></p>
   <h2><span class="dot" style="background:var(--sched)"></span>事件池(event pooling)</h2>
   <p>React 16 会<b>复用</b> SyntheticEvent 对象(用完清空属性),异步访问 <code>e.target</code> 会拿到 null,需 <code>e.persist()</code>。<b>React 17 起移除了事件池</b>,可放心异步使用事件对象。</p>
   <h2><span class="dot" style="background:var(--warn)"></span>合成事件 vs 原生事件顺序 / 为什么 stopPropagation 有时无效</h2>

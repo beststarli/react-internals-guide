@@ -87,6 +87,9 @@
 }}&gt;
   &lt;List/&gt;
 &lt;/Profiler&gt;</pre>
+  <h3>一次性能排查应该怎样走</h3>
+  <ol class="clean"><li><b>稳定复现：</b>明确是哪次点击、输入或导航慢，并用生产构建或接近生产的数据量复现。</li><li><b>先看浏览器：</b>Performance 面板判断时间花在脚本、样式布局、绘制还是网络。</li><li><b>再看 React：</b>Profiler 找到耗时 Commit、热点组件及其更新原因。</li><li><b>做最小改动：</b>状态下放、移除 Effect 链、虚拟化或 memo，只处理已经证明的瓶颈。</li><li><b>前后对比：</b>用相同操作、设备与数据比较，而不是凭“感觉更快”。</li></ol>
+  <p><code>actualDuration</code> 是这次更新实际花费；<code>baseDuration</code> 估算没有记忆化时整棵子树的成本。Commit 很频繁但每次很短，与单次长 Commit，是两种不同问题。</p>
 
   <h2><span class="dot" style="background:var(--recon)"></span>核心 Web 指标与 React 的关系</h2>
   <table class="simple">
@@ -102,6 +105,12 @@
     <li>异步请求返回时组件已卸载仍 setState → 用 <code>AbortController</code> 或忽略标志。</li>
     <li>闭包捕获旧值(stale closure)→ 依赖数组写全、或用 ref/函数式更新。</li>
   </ul>
+  <pre><span class="fn">useEffect</span>(() =&gt; {
+  <span class="kw">const</span> controller = <span class="kw">new</span> AbortController();
+  <span class="fn">load</span>({ signal: controller.signal }).<span class="fn">then</span>(setData, handleError);
+  <span class="kw">return</span> () =&gt; controller.<span class="fn">abort</span>();
+}, [url]);</pre>
+  <div class="callout warn"><b>“组件卸载后 setState”不等于唯一泄漏定义。</b>真正的泄漏是无用对象仍被计时器、监听器、缓存或闭包引用，无法被 GC。应配合 Memory 面板和 heap snapshot 看保留路径。</div>
 
   <h2><span class="dot" style="background:var(--sched)"></span>Suspense 做数据获取</h2>
   <p>配合支持 Suspense 的数据层(RSC、React Query、Relay 等),组件用 <code>use()</code> 或库的 hook「读」数据,未就绪自动挂起显示 fallback,<b>把 loading 状态从组件内 <code>if(loading)</code> 上移到声明式的 <code>&lt;Suspense&gt;</code> 边界</b>,配合并发做「避免 loading 闪烁」。</p>

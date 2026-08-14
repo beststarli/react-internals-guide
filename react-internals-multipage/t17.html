@@ -98,7 +98,7 @@
   <div class="callout warn"><b>为什么 setTimeout/Promise 里会「漏网」:</b>这些回调是<b>浏览器/微任务队列直接调</b>的,<b>不经过</b> React 的 <code>batchedUpdates</code> 包裹 → <code>executionContext</code> 没打标志 → 每个 setState 都当场各刷一次渲染。</div>
 
   <h2><span class="dot" style="background:var(--recon)"></span>② React 18:靠「微任务 + 去重」批处理(所以哪都能批)</h2>
-  <p>18 不再依赖执行上下文标志。每次 setState → <code>scheduleUpdateOnFiber</code> → <code>ensureRootIsScheduled</code>。对 SyncLane,它用 <b>微任务</b>安排 flush,而且会<b>去重</b>:</p>
+  <p>React 18 的并发根仍然会使用执行上下文，但批处理边界不再局限于 React 合成事件。每次 setState → <code>scheduleUpdateOnFiber</code> → root 调度；同一个同步批次内，root 只需保留一个同优先级回调，随后统一处理已经入队的 updates：</p>
   <pre><span class="kw">function</span> <span class="fn">ensureRootIsScheduled</span>(root){
   <span class="kw">const</span> newPriority = <span class="fn">getHighestPriorityLane</span>(<span class="fn">getNextLanes</span>(root));
 <span class="hl">  <span class="kw">if</span>(root.callbackPriority === newPriority) <span class="kw">return</span>; <span class="cm">// ★同优先级已排过 → 直接返回(去重!)</span></span>
@@ -106,7 +106,8 @@
   <span class="kw">else</span> <span class="fn">scheduleCallback</span>(…);
   root.callbackPriority = newPriority;
 }</pre>
-  <p>因为 flush 挂在<b>「微任务 / 本轮事件循环末尾」</b>,而不是「React 回调末尾」,所以 setTimeout、Promise、原生事件里的多次 setState 也落在同一批、只刷一次——这就是「<b>任何地方都自动批处理</b>」。</p>
+  <p>对使用 <code>createRoot</code> 的应用，React 会把 React 事件、Promise、定时器和原生事件回调中的更新纳入自动批处理。这里要把两个概念分开：<b>UpdateQueue 仍逐条记录更新</b>；批处理减少的是调度与 Render/Commit 次数，并不是把多次 setState 改写成一条。</p>
+  <div class="callout warn"><b>边界不是“永远等到事件循环末尾”。</b>React 可以在合适的微任务检查点刷新同步工作；<code>await</code>、新的宿主回调、不同 Lane、<code>flushSync</code> 都可能形成新的批次。判断结果时应看“是否属于同一批调度工作”，不要死记宏任务/微任务口诀。</div>
 
   <h2><span class="dot" style="background:var(--fiber)"></span>③ 一步步看:Promise 里连写 3 次 setState</h2>
   <div class="card">
@@ -122,6 +123,7 @@
 <span class="cm">// 下一行就能读到更新后的 DOM(如需立刻测量布局)</span>
 console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
   <p style="font-size:13px">flushSync 内部临时设好执行上下文,并在结束时<b>立刻</b> <code>flushSyncCallbacks</code>,不等微任务。代价是丢掉批处理的性能收益,只在确实需要「同步拿到结果」时用。</p>
+  <div class="callout warn"><b>不要在 Render 或生命周期执行期间调用 flushSync。</b>它可能迫使 pending Effect 或 Suspense fallback 提前出现，也会压缩浏览器处理输入与绘制的空间。典型用途只是与打印、选区、测量等浏览器 API 做同步桥接。</div>
 
   <h2><span class="dot" style="background:var(--fiber)"></span>⑤ 并发(Transition)下的批量</h2>
   <p><code>startTransition</code> 里的多次 setState 落在同一个 <b>TransitionLane</b>,同样只渲染一次。但如果一批里<b>混了不同优先级</b>(比如一个 Sync、一个 Transition),会<b>分成两批各自渲染</b>——高优先渲并上屏,低优随后。这也是靠 Lane 区分的。</p>

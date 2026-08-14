@@ -94,6 +94,11 @@
 
   <h2><span class="dot" style="background:var(--warn)"></span>前提:遵守 React 规则</h2>
   <p>编译器能安全优化的<b>前提是你的组件是「纯」的</b>、遵守 Hooks 规则、不在渲染中产生副作用。这也是为什么 <code>StrictMode</code> 双调用、ESLint 规则如此重要 —— 它们帮你写出编译器能优化的代码。它是<b>渐进采用</b>的:可整项目、也可按文件开启。</p>
+  <h2><span class="dot" style="background:var(--fiber)"></span>编译器与运行时怎样分工</h2>
+  <p>编译器在构建阶段分析依赖与生命周期并生成缓存槽；运行时仍是普通 React，Lane、Fiber、Diff 与 Commit 都没有被替换。它减少某些重复计算和子树更新，但不会让 DOM、网络或昂贵 Effect 自动变快。</p>
+  <table class="simple"><tr><th>问题</th><th>编译器能否解决</th></tr><tr><td>稳定子树被反复创建</td><td>通常可用自动记忆化减少工作</td></tr><tr><td>Render 修改 props 或全局变量</td><td>不能，应先修复纯度</td></tr><tr><td>Effect 重复请求或更新循环</td><td>不能，这是副作用设计问题</td></tr><tr><td>大量 DOM 同时布局</td><td>不能，需要虚拟化或减少节点</td></tr></table>
+  <h3>渐进接入</h3>
+  <ol class="clean"><li>先启用相关 ESLint 规则，修复纯度与 Hooks 违规。</li><li>小范围开启编译，检查诊断与测试。</li><li>用 Profiler 比较真实交互，而不是只看删了多少 memo。</li><li>保留第三方接口明确要求的稳定引用，再清理冗余手写缓存。</li></ol>
   <div class="callout good"><b>趋势判断:</b>未来 <code>useMemo/useCallback</code> 会从「性能必备」退化为「少数手动兜底」。但<b>理解它们的原理依然重要</b> —— 你得知道编译器在替你做什么、什么情况下它会放弃优化。</div>
   <div class="callout good"><b>本章小结：</b>编译器静态分析、自动缓存计算与子元素 = 全自动 useMemo;前提是组件纯、守 Hooks 规则(所以 StrictMode/ESLint 重要);未来手写 memo 退为兜底。→ 下一章:<a class="xref" data-go="t27">第七层·高级模式与陷阱</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t25">← 25外部状态与撕裂</button><button class="act" data-go="t27">27高级模式与陷阱 →</button></div>

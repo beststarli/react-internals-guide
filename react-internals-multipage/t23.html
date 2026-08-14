@@ -99,6 +99,11 @@
 
   <h2><span class="dot" style="background:var(--recon)"></span>底层:RSC Payload 与边界</h2>
   <p>服务器不把 Server Component 渲染成 HTML,而是渲染成一种特殊的<b>序列化格式(RSC Payload)</b> —— 一棵描述 UI 的树,其中客户端组件是「占位引用」(指向要加载的 JS chunk)。客户端拿到 payload 后拼装,只为标了 <code>'use client'</code> 的部分下载和 hydrate JS。<code>'use server'</code> 则用于 <b>Server Actions</b>(客户端能直接调用的服务器函数)。</p>
+  <div class="callout"><b>RSC 与 SSR 是两个维度：</b>RSC 决定组件在哪里执行、哪些模块进入浏览器；SSR 决定是否提前生成 HTML。框架常同时使用二者，但 RSC Payload 本身不是 HTML。</div>
+  <h3>一次导航的简化链路</h3>
+  <ol class="clean"><li>客户端发起路由或 Action 请求。</li><li>服务端执行 Server Components，读取数据并产生增量 Payload。</li><li>客户端按模块引用加载必要的 Client Component 代码。</li><li>React 合并新旧树，尽量保留未替换的客户端 state，再按普通更新提交。</li></ol>
+  <p><code>'use client'</code> 声明的是模块图边界：该文件及其客户端依赖会进入客户端 bundle。服务组件可以把已经构造好的 children 传给客户端组件，从而把交互边界留在叶子，而不必让整棵上层模块都变成客户端代码。</p>
+  <div class="callout warn"><b>跨边界的数据必须可序列化。</b>数据库连接、普通函数、DOM 节点和复杂类实例不能作为 Server → Client props 直接传递；需要回调服务器时使用框架的 Server Function/Action 协议。</div>
   <div class="callout">RSC 通常由框架(Next.js App Router 等)集成,不是裸 React 直接用。理解要点:<b>组件默认在服务器,交互的「叶子」才下沉到客户端</b>,从而大幅减少发到浏览器的 JS。</div>
   <div class="callout good"><b>本章小结：</b>默认服务器组件(能 await 取数据、零客户端 JS),标 <code>&#39;use client&#39;</code> 的才下载/hydrate;服务器把树序列化成 RSC Payload,客户端拼装。→ 下一章:<a class="xref" data-go="t24">第七层·React 19</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t22">← 22SSR / Hydration / 流式</button><button class="act" data-go="t24">24React 19 新特性 →</button></div>

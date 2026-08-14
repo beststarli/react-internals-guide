@@ -2749,7 +2749,7 @@ scheduleCallback(prio, performConcurrentWorkOnRoot.bind(<span class="kw">null</s
   <div class="callout warn"><b>为什么 setTimeout/Promise 里会「漏网」:</b>这些回调是<b>浏览器/微任务队列直接调</b>的,<b>不经过</b> React 的 <code>batchedUpdates</code> 包裹 → <code>executionContext</code> 没打标志 → 每个 setState 都当场各刷一次渲染。</div>
 
   <h2><span class="dot" style="background:var(--recon)"></span>② React 18:靠「微任务 + 去重」批处理(所以哪都能批)</h2>
-  <p>18 不再依赖执行上下文标志。每次 setState → <code>scheduleUpdateOnFiber</code> → <code>ensureRootIsScheduled</code>。对 SyncLane,它用 <b>微任务</b>安排 flush,而且会<b>去重</b>:</p>
+  <p>React 18 的并发根仍然会使用执行上下文，但批处理边界不再局限于 React 合成事件。每次 setState → <code>scheduleUpdateOnFiber</code> → root 调度；同一个同步批次内，root 只需保留一个同优先级回调，随后统一处理已经入队的 updates：</p>
   <pre><span class="kw">function</span> <span class="fn">ensureRootIsScheduled</span>(root){
   <span class="kw">const</span> newPriority = <span class="fn">getHighestPriorityLane</span>(<span class="fn">getNextLanes</span>(root));
 <span class="hl">  <span class="kw">if</span>(root.callbackPriority === newPriority) <span class="kw">return</span>; <span class="cm">// ★同优先级已排过 → 直接返回(去重!)</span></span>
@@ -2757,7 +2757,8 @@ scheduleCallback(prio, performConcurrentWorkOnRoot.bind(<span class="kw">null</s
   <span class="kw">else</span> <span class="fn">scheduleCallback</span>(…);
   root.callbackPriority = newPriority;
 }</pre>
-  <p>因为 flush 挂在<b>「微任务 / 本轮事件循环末尾」</b>,而不是「React 回调末尾」,所以 setTimeout、Promise、原生事件里的多次 setState 也落在同一批、只刷一次——这就是「<b>任何地方都自动批处理</b>」。</p>
+  <p>对使用 <code>createRoot</code> 的应用，React 会把 React 事件、Promise、定时器和原生事件回调中的更新纳入自动批处理。这里要把两个概念分开：<b>UpdateQueue 仍逐条记录更新</b>；批处理减少的是调度与 Render/Commit 次数，并不是把多次 setState 改写成一条。</p>
+  <div class="callout warn"><b>边界不是“永远等到事件循环末尾”。</b>React 可以在合适的微任务检查点刷新同步工作；<code>await</code>、新的宿主回调、不同 Lane、<code>flushSync</code> 都可能形成新的批次。判断结果时应看“是否属于同一批调度工作”，不要死记宏任务/微任务口诀。</div>
 
   <h2><span class="dot" style="background:var(--fiber)"></span>③ 一步步看:Promise 里连写 3 次 setState</h2>
   <div class="card">
@@ -2773,6 +2774,7 @@ scheduleCallback(prio, performConcurrentWorkOnRoot.bind(<span class="kw">null</s
 <span class="cm">// 下一行就能读到更新后的 DOM(如需立刻测量布局)</span>
 console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
   <p style="font-size:13px">flushSync 内部临时设好执行上下文,并在结束时<b>立刻</b> <code>flushSyncCallbacks</code>,不等微任务。代价是丢掉批处理的性能收益,只在确实需要「同步拿到结果」时用。</p>
+  <div class="callout warn"><b>不要在 Render 或生命周期执行期间调用 flushSync。</b>它可能迫使 pending Effect 或 Suspense fallback 提前出现，也会压缩浏览器处理输入与绘制的空间。典型用途只是与打印、选区、测量等浏览器 API 做同步桥接。</div>
 
   <h2><span class="dot" style="background:var(--fiber)"></span>⑤ 并发(Transition)下的批量</h2>
   <p><code>startTransition</code> 里的多次 setState 落在同一个 <b>TransitionLane</b>,同样只渲染一次。但如果一批里<b>混了不同优先级</b>(比如一个 Sync、一个 Transition),会<b>分成两批各自渲染</b>——高优先渲并上屏,低优随后。这也是靠 Lane 区分的。</p>
@@ -2811,6 +2813,16 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
 }</pre>
   <h2><span class="dot" style="background:var(--sched)"></span>与 Scheduler 协同 & 优先级降级</h2>
   <p>配合并发,Suspense 可以做到"避免 loading 闪烁":高优更新若会导致已显示内容退回 fallback,React 可用 <b>transition 优先级</b>让旧 UI 继续显示、在后台低优渲染新内容,ready 后再切换。边界的 fallback 渲染本身也是一次正常的 Reconcile,受同一套 Lane 调度。</p>
+  <h2><span class="dot" style="background:var(--fiber)"></span>一次挂起在 Fiber 中怎样闭环</h2>
+  <ol class="clean">
+    <li>组件 Render 读取尚未完成的资源，抛出一个 thenable；<code>throwException</code> 沿 <code>return</code> 链寻找最近的 Suspense 边界。</li>
+    <li>React 标记捕获边界和本次 Render 的退出状态；是否立即展示 fallback，取决于当前界面、更新 Lane 与边界策略。</li>
+    <li>React 把 thenable 登记为 wakeable，并安装 ping listener。它完成时只表示“可以重试”，不是直接修改 DOM。</li>
+    <li>ping 把相关 Lane 重新标为可调度，root 再走 Schedule → Render；只有这次 Render 完成后才进入 Commit。</li>
+  </ol>
+  <div class="callout"><b>连接前文：</b>Suspense 没有绕开 Fiber、Lane 和 Scheduler。Promise 只把本次 Render 从“可完成”变成“需等待”，真正的恢复仍是一轮按 Lane 调度的 React 更新。</div>
+  <h3>边界应该怎样切</h3>
+  <p>边界太大，一个局部资源会让整页退到 fallback；边界太碎，则容易出现密集闪烁和布局跳动。通常按用户可理解的加载单元切分，并用 <code>SuspenseList</code>（可用环境中）或框架的路由/数据约定协调展示顺序。<code>lazy</code> 只负责代码加载，数据请求缓存与去重仍应交给框架或支持 Suspense 的数据层。</p>
   <div class="callout good"><b>本章小结：</b>「throw Promise」挂起 → 渲染 fallback → resolve 后重渲染换回内容;<code>lazy</code> 就是把 import() 包成会 throw 的组件;配合并发可避免 loading 闪烁。→ 下一章:<a class="xref" data-go="t19">第五层·合成事件</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t17">← 17</button><button class="act" data-go="t19">19 · 合成事件 →</button></div>
 </section>
@@ -2827,6 +2839,19 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
   </div>
   <h2><span class="dot" style="background:var(--render)"></span>事件委托</h2>
   <p>React 不给每个元素绑监听器,而是<b>把所有事件统一委托到根容器</b>(React 17+ 是 <code>createRoot</code> 的 container,16 是 document)。DOM 节点上挂 <code>__reactFiber$xxx</code> 指回 fiber,事件触发时反查目标 fiber,再<b>沿 fiber 树的 return 链模拟捕获/冒泡</b>,派发归一化的 <b>SyntheticEvent</b>。</p>
+  <div class="phase-strip">
+    <div><strong>收集</strong>根容器收到原生事件，定位 target 对应的 Fiber。</div>
+    <div><strong>构造</strong>插件系统提取 SyntheticEvent，并沿 Fiber return 链收集监听器。</div>
+    <div><strong>派发</strong>先捕获、后冒泡执行；事件类型同时决定更新优先级。</div>
+  </div>
+  <h2><span class="dot" style="background:var(--accent)"></span>事件优先级怎样接到 Lane</h2>
+  <table class="simple">
+    <tr><th>事件类别</th><th>例子</th><th>调度含义</th></tr>
+    <tr><td>离散事件</td><td>click、keydown</td><td>用户期待立即反馈，通常映射到最高的同步更新优先级</td></tr>
+    <tr><td>连续事件</td><td>mousemove、scroll</td><td>连续产生，可被更新的样本覆盖，优先级低于离散事件</td></tr>
+    <tr><td>默认事件</td><td>其他普通回调</td><td>使用默认更新优先级</td></tr>
+  </table>
+  <p>派发前 React 设置当前 update priority，处理器里的 setState 再由 <code>requestUpdateLane</code> 读取它。于是本章补上了前文 Lane 的“来源”：<b>不是 Scheduler 猜测用户意图，而是事件系统先把交互语义转换成更新优先级。</b></p>
   <h2><span class="dot" style="background:var(--sched)"></span>事件池(event pooling)</h2>
   <p>React 16 会<b>复用</b> SyntheticEvent 对象(用完清空属性),异步访问 <code>e.target</code> 会拿到 null,需 <code>e.persist()</code>。<b>React 17 起移除了事件池</b>,可放心异步使用事件对象。</p>
   <h2><span class="dot" style="background:var(--warn)"></span>合成事件 vs 原生事件顺序 / 为什么 stopPropagation 有时无效</h2>
@@ -2875,6 +2900,27 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
   <p>只比 props 第一层。所以传<b>新建的对象/数组/函数</b>(每次渲染引用都变)会让 memo 失效 —— 这正是要配 <code>useMemo/useCallback</code> 稳定引用的原因。深层嵌套对象浅比较也测不出,需自定义 <code>areEqual</code>。</p>
   <h2><span class="dot" style="background:var(--fiber)"></span>如何做到精准局部更新</h2>
   <p>state 定义得越靠近使用它的组件,重渲染范围越小(状态下放)。配合 <code>childLanes</code> 的 bailout,只有"从 root 到发生更新的 fiber"这条路径 + 其必要子树会被 beginWork,兄弟子树整体跳过。</p>
+  <h2><span class="dot" style="background:var(--sched)"></span>先分清三种“性能成本”</h2>
+  <table class="simple">
+    <tr><th>成本</th><th>发生位置</th><th>常用手段</th></tr>
+    <tr><td>组件执行</td><td>Render 调用函数组件、计算 JSX</td><td>状态下放、组合 children、必要时 memo</td></tr>
+    <tr><td>协调比较</td><td>Reconciler 比较 element 与 Fiber</td><td>稳定类型与 key，缩小更新子树</td></tr>
+    <tr><td>宿主提交</td><td>Commit 修改 DOM、布局和绘制</td><td>减少 DOM 规模、虚拟列表、避免布局抖动</td></tr>
+  </table>
+  <p>“组件重新执行”不等于“DOM 一定更新”。React 可能执行组件并完成 Diff，最后发现没有任何 Host flag；反过来，一个很小的组件也可能触发昂贵布局。因此优化前要先用 Profiler 判断瓶颈在哪一层。</p>
+  <h3>memo、useMemo、useCallback 各缓存什么</h3>
+  <ul class="clean">
+    <li><code>memo(Component)</code> 缓存的是“是否需要重新执行这个组件”的判断。</li>
+    <li><code>useMemo(factory, deps)</code> 缓存一次计算结果，不能保证永远保留，语义上不应依赖它保证正确性。</li>
+    <li><code>useCallback(fn, deps)</code> 等价于缓存函数引用，主要用于把稳定回调传给 memo 子组件或作为其他 Hook 依赖。</li>
+  </ul>
+  <pre><span class="kw">const</span> Row = <span class="fn">memo</span>(<span class="kw">function</span> Row({ item, onSelect }) { … });
+
+<span class="kw">function</span> List({ items }) {
+  <span class="kw">const</span> onSelect = <span class="fn">useCallback</span>(id =&gt; <span class="fn">setSelected</span>(id), []);
+  <span class="kw">return</span> items.<span class="fn">map</span>(item =&gt; &lt;Row key={item.id} item={item} onSelect={onSelect} /&gt;);
+}</pre>
+  <div class="callout warn"><b>优化顺序：</b>先避免不必要的状态提升和 Effect 链式更新，再测量热点，最后才给热点建立稳定引用。到处添加 memo 会增加比较、依赖维护和阅读成本，也可能完全没有收益。</div>
   <div class="callout good"><b>本章小结：</b>bailout = props 引用没变 + 无自身更新 + context 没变 → 复用旧子树,<code>childLanes</code> 为 0 还能整棵跳过;memo 只浅比较第一层,传新建对象/函数会失效,要配 useMemo/useCallback。→ 下一章:<a class="xref" data-go="t21">第六层·渲染 bug</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t19">← 19</button><button class="act" data-go="t21">21 · 渲染 bug →</button></div>
 </section>
@@ -2889,6 +2935,22 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
     <p style="margin:8px 0 0"><b>本节内容：</b>从更新队列、闭包、key 和批处理机制解释四种常见问题。</p>
     <p style="margin:6px 0 0">本章包括：<b>setState 为何时同步时异步、多次 setState 为何合并、useTransition 为何能解卡顿、useEffect 依赖写错为何死循环</b>。</p>
   </div>
+  <h2><span class="dot" style="background:var(--accent)"></span>总模型：每次 Render 都是一张状态快照</h2>
+  <p>函数组件每执行一次，就产生一组属于这次 Render 的 props、state、局部变量和事件处理器。旧处理器闭包不会自动改写为新值；setState 只是把 Update 放进队列，也不会修改当前这张快照。</p>
+  <pre><span class="fn">setCount</span>(count + 1);
+<span class="fn">setCount</span>(count + 1); <span class="cm">// 两行都读取同一张快照里的 count</span>
+
+<span class="fn">setCount</span>(c =&gt; c + 1);
+<span class="fn">setCount</span>(c =&gt; c + 1); <span class="cm">// updater 按队列顺序消费前一次结果</span></pre>
+  <h3>四类常见 bug 对应哪条底层规则</h3>
+  <table class="simple">
+    <tr><th>现象</th><th>根因</th><th>修复方向</th></tr>
+    <tr><td>定时器总读到旧 state</td><td>回调闭包属于旧 Render</td><td>写全依赖、函数式更新，或用 ref 保存非 UI 最新值</td></tr>
+    <tr><td>列表输入框内容串行</td><td>用 index key 导致 Fiber 身份跟位置绑定</td><td>使用数据本身稳定且唯一的 id</td></tr>
+    <tr><td>Effect 无限循环</td><td>Effect 更新了自己的不稳定依赖</td><td>移除不必要 Effect，稳定依赖或改为事件驱动</td></tr>
+    <tr><td>修改对象后界面不更新</td><td>引用未变，React 的 Object.is/浅比较无法观察内部突变</td><td>创建新对象，并只复制发生变化的路径</td></tr>
+  </table>
+  <div class="callout"><b>key 不是给 DOM 用的。</b>它和 element type 一起决定 Fiber 身份。身份稳定，state 才跟着正确的数据项走；key 改变则意味着卸载旧 Fiber、挂载新 Fiber，内部 state 和 Effect 都会重置。</div>
   <h3>为什么 setState 有时同步、有时异步?</h3>
   <p>setState 本身<b>从不真正同步更新 state</b>——它总是<b>异步批处理</b>。所谓"同步"的错觉:在 React 16/17 的<b>事件回调</b>里,setState 后立即读 <code>this.state</code>/state 变量拿到的是<b>旧值</b>(还没渲染);而在 <code>setTimeout</code> 里(16/17 不批处理)每次 setState 会各自触发一次渲染,看起来"立即生效"。React 18 全局自动批处理后行为统一。要立即拿新值:<code>flushSync</code> 或 useReducer/函数式更新。</p>
   <h3>为什么多次 setState 会合并?</h3>
@@ -2914,18 +2976,22 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
 
   <h2><span class="dot" style="background:var(--accent)"></span>Hydration(注水/激活)</h2>
   <p>服务器发来的 HTML 是「死」的(没有事件、没有 state)。<b>Hydration</b> 是客户端 React <b>复用</b>这些已有 DOM、给它们绑定事件、挂上 Fiber/state,让它「活」过来的过程。关键:<b>不重新创建 DOM,只是附着</b>。</p>
+  <div class="phase-strip"><div><strong>服务端 Render</strong>组件输出 HTML，浏览器先展示内容。</div><div><strong>客户端 Hydrate</strong>构建 Fiber，与已有 DOM 对齐并绑定行为。</div><div><strong>后续更新</strong>重新接回 Lane → Render → Commit 主线。</div></div>
   <pre><span class="cm">// 客户端:hydrateRoot 而非 createRoot</span>
 <span class="kw">import</span> { hydrateRoot } <span class="kw">from</span> <span class="st">'react-dom/client'</span>;
 <span class="fn">hydrateRoot</span>(document.getElementById(<span class="st">'root'</span>), &lt;App/&gt;);
 <span class="cm">// 服务端</span>
 <span class="kw">import</span> { renderToPipeableStream } <span class="kw">from</span> <span class="st">'react-dom/server'</span>;</pre>
   <div class="callout warn"><b>Hydration 不匹配(mismatch):</b>若服务端渲染的 HTML 与客户端首次渲染结果不一致(如用了 <code>Date.now()</code>、<code>window</code>、随机数),React 会警告并可能丢弃服务端 HTML 重新渲染,首屏优势尽失。用 <code>useEffect</code> 里读浏览器专属值、或 <code>useId</code> 保证 id 一致来避免。</div>
+  <p>本质上，客户端第一次 Render 是在给已有 DOM “认领身份”。时间、随机数、无效 HTML 嵌套、浏览器专属分支或两端数据版本不同，都会使 element/Fiber 与 DOM 无法可靠对齐。文本差异可能被修复，结构差异则可能让整段子树退回客户端重建。</p>
 
   <h2><span class="dot" style="background:var(--recon)"></span>React 18 两大 SSR 升级:流式 + 选择性 Hydration</h2>
   <ul class="clean">
     <li><b>Streaming SSR(流式渲染):</b><code>renderToPipeableStream</code> 边渲染边把 HTML <b>分块</b>发给浏览器,不必等整页渲染完。慢的部分(数据未就绪)用 <code>&lt;Suspense&gt;</code> 包住先发 fallback,数据好了再流式补发那一块 HTML + 内联脚本替换。</li>
     <li><b>Selective Hydration(选择性注水):</b>不必等整棵树的 JS 都加载完才能交互。React 按 <code>Suspense</code> 边界<b>分块注水</b>,而且<b>用户点击哪块就优先注水哪块</b>(利用并发的 Lane 优先级)。这就是 SSR 与并发架构的结合点。</li>
   </ul>
+  <table class="simple"><tr><th>阶段</th><th>用户看到什么</th><th>React 在做什么</th></tr><tr><td>Shell 到达</td><td>页面骨架与 fallback</td><td>浏览器提前解析、绘制、下载资源</td></tr><tr><td>边界流入</td><td>真实内容逐块替换 fallback</td><td>服务端按 Suspense 边界完成顺序发送片段</td></tr><tr><td>JS 到达</td><td>局部区域逐步可交互</td><td>客户端按边界及交互优先级 hydrate</td></tr></table>
+  <div class="callout warn"><b>SSR 不等于减少总工作。</b>服务端要 Render，客户端通常仍要 Hydrate。它优化的是首屏关键路径与用户感知；边界、数据和 bundle 切分不合理时，甚至可能增加服务器成本与 hydration 长任务。</div>
   <div class="card" style="text-align:center">
     <svg viewBox="0 0 720 150" style="width:100%;height:auto">
       <g font-family="monospace" font-size="11">
@@ -2983,6 +3049,11 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
 
   <h2><span class="dot" style="background:var(--recon)"></span>底层:RSC Payload 与边界</h2>
   <p>服务器不把 Server Component 渲染成 HTML,而是渲染成一种特殊的<b>序列化格式(RSC Payload)</b> —— 一棵描述 UI 的树,其中客户端组件是「占位引用」(指向要加载的 JS chunk)。客户端拿到 payload 后拼装,只为标了 <code>'use client'</code> 的部分下载和 hydrate JS。<code>'use server'</code> 则用于 <b>Server Actions</b>(客户端能直接调用的服务器函数)。</p>
+  <div class="callout"><b>RSC 与 SSR 是两个维度：</b>RSC 决定组件在哪里执行、哪些模块进入浏览器；SSR 决定是否提前生成 HTML。框架常同时使用二者，但 RSC Payload 本身不是 HTML。</div>
+  <h3>一次导航的简化链路</h3>
+  <ol class="clean"><li>客户端发起路由或 Action 请求。</li><li>服务端执行 Server Components，读取数据并产生增量 Payload。</li><li>客户端按模块引用加载必要的 Client Component 代码。</li><li>React 合并新旧树，尽量保留未替换的客户端 state，再按普通更新提交。</li></ol>
+  <p><code>'use client'</code> 声明的是模块图边界：该文件及其客户端依赖会进入客户端 bundle。服务组件可以把已经构造好的 children 传给客户端组件，从而把交互边界留在叶子，而不必让整棵上层模块都变成客户端代码。</p>
+  <div class="callout warn"><b>跨边界的数据必须可序列化。</b>数据库连接、普通函数、DOM 节点和复杂类实例不能作为 Server → Client props 直接传递；需要回调服务器时使用框架的 Server Function/Action 协议。</div>
   <div class="callout">RSC 通常由框架(Next.js App Router 等)集成,不是裸 React 直接用。理解要点:<b>组件默认在服务器,交互的「叶子」才下沉到客户端</b>,从而大幅减少发到浏览器的 JS。</div>
   <div class="callout good"><b>本章小结：</b>默认服务器组件(能 await 取数据、零客户端 JS),标 <code>&#39;use client&#39;</code> 的才下载/hydrate;服务器把树序列化成 RSC Payload,客户端拼装。→ 下一章:<a class="xref" data-go="t24">第七层·React 19</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t22">← 22</button><button class="act" data-go="t24">24 · React 19 →</button></div>
@@ -3005,6 +3076,8 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
   <span class="kw">const</span> comments = <span class="fn">use</span>(commentsPromise);  <span class="cm">// 未就绪 → 抛出挂起,由 Suspense 接住</span>
   <span class="kw">return</span> comments.<span class="fn">map</span>(c =&gt; &lt;p&gt;{c.text}&lt;/p&gt;);
 }</pre>
+  <p>Promise pending 时，<code>use</code> 让当前组件挂起；fulfilled 时返回结果；rejected 时把错误交给最近的 Error Boundary。它可以条件调用，但仍只能在组件或自定义 Hook 的 Render 中使用。</p>
+  <div class="callout warn"><b>资源身份必须稳定。</b>如果客户端每次 Render 都新建 Promise，重试时会得到另一个未完成资源，造成重复请求甚至持续挂起。Promise 通常由框架、缓存层或 Server Component 创建后传入。</div>
 
   <h2><span class="dot" style="background:var(--recon)"></span>Actions 与表单</h2>
   <ul class="clean">
@@ -3018,6 +3091,8 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
   <span class="fn">addOptimistic</span>(newMsg);        <span class="cm">// UI 立刻显示(乐观)</span>
   <span class="kw">await</span> <span class="fn">sendToServer</span>(formData);   <span class="cm">// 真正提交;失败则自动回滚</span>
 }</pre>
+  <p>Action 把异步提交放进过渡语义：React 能统一管理 pending、错误以及提交完成后的状态衔接。乐观值不是直接覆盖服务端事实，而是 pending 期间叠加的一层临时视图；成功后真实结果接管，失败时该层撤销。</p>
+  <table class="simple"><tr><th>API</th><th>负责的问题</th><th>放置位置</th></tr><tr><td><code>useActionState</code></td><td>Action 返回值、错误与 pending</td><td>拥有提交逻辑的组件</td></tr><tr><td><code>useFormStatus</code></td><td>读取最近父 form 的提交状态</td><td>form 内部的按钮/提示子组件</td></tr><tr><td><code>useOptimistic</code></td><td>真实结果返回前的临时状态</td><td>需要即时反馈的列表或详情</td></tr></table>
 
   <h2><span class="dot" style="background:var(--sched)"></span>其它易忽略的改进</h2>
   <ul class="clean">
@@ -3051,6 +3126,9 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
   store.getSnapshot,    <span class="cm">// 读当前值(React 会用它校验一致性)</span>
   store.getServerSnapshot <span class="cm">// SSR 时的值(可选)</span>
 );</pre>
+  <h3>这个 Hook 要求 store 遵守什么契约</h3>
+  <ul class="clean"><li><code>getSnapshot()</code> 在 store 未变化时必须返回 Object.is 相等的值；若每次创建新对象，React 会认为数据一直在变。</li><li><code>subscribe(listener)</code> 必须返回取消订阅函数，并尽量保持函数引用稳定。</li><li>SSR 时应提供 <code>getServerSnapshot</code>，且客户端 hydration 首次读取要与服务端序列化值一致。</li></ul>
+  <p>非阻塞 Render 前后，React 会再次读取快照。如果外部 store 在中途变化，React 会放弃可能不一致的结果并同步重试，确保一个 Commit 对应同一版本的数据。</p>
   <div class="callout"><b>问题来源：</b>渲染可以中断，而外部数据可能在中断期间发生变化。<code>useSyncExternalStore</code> 提供统一的订阅和快照读取方式，使 React 能检测变化并保持不同组件读取结果的一致性。</div>
   <div class="callout good"><b>本章小结：</b>并发可中断 → 渲染途中外部数据变了 → 同一帧不同组件读到不同值 = 撕裂;<code>useSyncExternalStore</code> 检测到就退回同步渲染保证一致;现代状态库内部都用它。→ 下一章:<a class="xref" data-go="t26">第七层·React Compiler</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t24">← 24</button><button class="act" data-go="t26">26 · React Compiler →</button></div>
@@ -3083,6 +3161,11 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
 
   <h2><span class="dot" style="background:var(--warn)"></span>前提:遵守 React 规则</h2>
   <p>编译器能安全优化的<b>前提是你的组件是「纯」的</b>、遵守 Hooks 规则、不在渲染中产生副作用。这也是为什么 <code>StrictMode</code> 双调用、ESLint 规则如此重要 —— 它们帮你写出编译器能优化的代码。它是<b>渐进采用</b>的:可整项目、也可按文件开启。</p>
+  <h2><span class="dot" style="background:var(--fiber)"></span>编译器与运行时怎样分工</h2>
+  <p>编译器在构建阶段分析依赖与生命周期并生成缓存槽；运行时仍是普通 React，Lane、Fiber、Diff 与 Commit 都没有被替换。它减少某些重复计算和子树更新，但不会让 DOM、网络或昂贵 Effect 自动变快。</p>
+  <table class="simple"><tr><th>问题</th><th>编译器能否解决</th></tr><tr><td>稳定子树被反复创建</td><td>通常可用自动记忆化减少工作</td></tr><tr><td>Render 修改 props 或全局变量</td><td>不能，应先修复纯度</td></tr><tr><td>Effect 重复请求或更新循环</td><td>不能，这是副作用设计问题</td></tr><tr><td>大量 DOM 同时布局</td><td>不能，需要虚拟化或减少节点</td></tr></table>
+  <h3>渐进接入</h3>
+  <ol class="clean"><li>先启用相关 ESLint 规则，修复纯度与 Hooks 违规。</li><li>小范围开启编译，检查诊断与测试。</li><li>用 Profiler 比较真实交互，而不是只看删了多少 memo。</li><li>保留第三方接口明确要求的稳定引用，再清理冗余手写缓存。</li></ol>
   <div class="callout good"><b>趋势判断:</b>未来 <code>useMemo/useCallback</code> 会从「性能必备」退化为「少数手动兜底」。但<b>理解它们的原理依然重要</b> —— 你得知道编译器在替你做什么、什么情况下它会放弃优化。</div>
   <div class="callout good"><b>本章小结：</b>编译器静态分析、自动缓存计算与子元素 = 全自动 useMemo;前提是组件纯、守 Hooks 规则(所以 StrictMode/ESLint 重要);未来手写 memo 退为兜底。→ 下一章:<a class="xref" data-go="t27">第七层·高级模式与陷阱</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t25">← 25</button><button class="act" data-go="t27">27 · 高级模式与陷阱 →</button></div>
@@ -3100,21 +3183,25 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
 
   <h2><span class="dot" style="background:var(--render)"></span>Error Boundary(错误边界)</h2>
   <p>类组件通过 <code>getDerivedStateFromError</code> / <code>componentDidCatch</code> 捕获子树渲染错误,展示兜底 UI(函数组件目前无等价 Hook,需用类或库)。<b>注意:</b>它捕获不到事件处理器、异步代码、SSR 里的错误。</p>
+  <p>它是错误版的“子树恢复点”：Render 抛错后 React 沿 Fiber return 链寻找最近边界，安排捕获更新并重新 Render fallback。边界宜按可独立恢复的产品区域划分，避免一个局部错误让整页消失。</p>
 
   <h2><span class="dot" style="background:var(--accent)"></span>Portal 与 forwardRef / useImperativeHandle</h2>
   <ul class="clean">
     <li><b><code>createPortal(child, domNode)</code>:</b>把子节点渲染到<b>父 DOM 层级之外</b>(如挂到 body),但<b>事件仍沿 React 树冒泡</b>(合成事件按 fiber 树,不按真实 DOM)。适合弹窗、tooltip。</li>
     <li><b><code>useImperativeHandle</code>:</b>配合 ref 暴露<b>受控的命令式接口</b>(如 <code>inputRef.current.focus()</code>),而不是整个 DOM。React 19 起 ref 可直接作 prop,forwardRef 不再必需。</li>
   </ul>
+  <div class="callout"><b>Portal 要同时看两棵树：</b>它只改变 Host DOM 的挂载位置，不改变 Fiber 父子关系。Context、错误边界和合成事件按 React 树工作；CSS、原生事件路径和焦点按 DOM 树工作。</div>
 
   <h2><span class="dot" style="background:var(--sched)"></span>StrictMode 双调用</h2>
   <p>开发模式下 <code>&lt;StrictMode&gt;</code> 会<b>故意双调用</b>渲染函数、以及 effect 的「挂载→卸载→再挂载」。目的:<b>暴露不纯的渲染和缺失的 effect 清理</b>。如果你的组件双调用后出 bug,说明它有副作用不纯 —— 也正是 React Compiler 能否优化它的分界线。<b>生产环境不会双调用。</b></p>
+  <p>正确修复不是用 ref 阻止第二次 Effect，而是让 setup/cleanup 对称：连接要断开、订阅要取消、请求要中止或忽略过期结果。这样真实卸载和路由切换时也安全。</p>
 
   <h2><span class="dot" style="background:var(--fiber)"></span>Context 性能陷阱</h2>
   <p>Context value 一变,<b>所有消费者都重渲染</b>(绕过 memo)。陷阱:把频繁变化的值和稳定的值放同一个 Provider,或每次渲染传<b>新对象字面量</b>作 value。优化:<b>拆分 Context</b>(变与不变分开)、value 用 <code>useMemo</code> 稳定、或用 <code>useSyncExternalStore</code>/状态库做<b>选择性订阅</b>。</p>
 
   <h2><span class="dot" style="background:var(--recon)"></span>useId</h2>
   <p><code>useId()</code> 生成<b>服务端/客户端一致</b>的唯一 id,专为解决 SSR hydration 中 id 不匹配(不能用随机数/递增计数)。用于 <code>aria-*</code>、label/input 关联等。</p>
+  <div class="callout warn"><b>useId 不能作为列表 key。</b>key 来自数据身份；useId 来自组件在 React 树中的位置，解决的是同构 HTML 的可访问性关联。</div>
   <div class="callout good"><b>本章小结：</b>Error Boundary 捕获子树渲染错误(捕不到事件/异步);Portal 渲染到别处但事件仍沿 fiber 树;StrictMode 开发双调用暴露不纯;Context value 一变所有消费者更新,要拆分/稳定 value。→ 下一章:<a class="xref" data-go="t28">第七层·性能诊断</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t26">← 26</button><button class="act" data-go="t28">28 · 性能诊断 →</button></div>
 </section>
@@ -3139,6 +3226,9 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
 }}&gt;
   &lt;List/&gt;
 &lt;/Profiler&gt;</pre>
+  <h3>一次性能排查应该怎样走</h3>
+  <ol class="clean"><li><b>稳定复现：</b>明确是哪次点击、输入或导航慢，并用生产构建或接近生产的数据量复现。</li><li><b>先看浏览器：</b>Performance 面板判断时间花在脚本、样式布局、绘制还是网络。</li><li><b>再看 React：</b>Profiler 找到耗时 Commit、热点组件及其更新原因。</li><li><b>做最小改动：</b>状态下放、移除 Effect 链、虚拟化或 memo，只处理已经证明的瓶颈。</li><li><b>前后对比：</b>用相同操作、设备与数据比较，而不是凭“感觉更快”。</li></ol>
+  <p><code>actualDuration</code> 是这次更新实际花费；<code>baseDuration</code> 估算没有记忆化时整棵子树的成本。Commit 很频繁但每次很短，与单次长 Commit，是两种不同问题。</p>
 
   <h2><span class="dot" style="background:var(--recon)"></span>核心 Web 指标与 React 的关系</h2>
   <table class="simple">
@@ -3154,6 +3244,12 @@ console.<span class="fn">log</span>(ref.current.offsetHeight);</pre>
     <li>异步请求返回时组件已卸载仍 setState → 用 <code>AbortController</code> 或忽略标志。</li>
     <li>闭包捕获旧值(stale closure)→ 依赖数组写全、或用 ref/函数式更新。</li>
   </ul>
+  <pre><span class="fn">useEffect</span>(() =&gt; {
+  <span class="kw">const</span> controller = <span class="kw">new</span> AbortController();
+  <span class="fn">load</span>({ signal: controller.signal }).<span class="fn">then</span>(setData, handleError);
+  <span class="kw">return</span> () =&gt; controller.<span class="fn">abort</span>();
+}, [url]);</pre>
+  <div class="callout warn"><b>“组件卸载后 setState”不等于唯一泄漏定义。</b>真正的泄漏是无用对象仍被计时器、监听器、缓存或闭包引用，无法被 GC。应配合 Memory 面板和 heap snapshot 看保留路径。</div>
 
   <h2><span class="dot" style="background:var(--sched)"></span>Suspense 做数据获取</h2>
   <p>配合支持 Suspense 的数据层(RSC、React Query、Relay 等),组件用 <code>use()</code> 或库的 hook「读」数据,未就绪自动挂起显示 fallback,<b>把 loading 状态从组件内 <code>if(loading)</code> 上移到声明式的 <code>&lt;Suspense&gt;</code> 边界</b>,配合并发做「避免 loading 闪烁」。</p>
@@ -3198,6 +3294,15 @@ context._currentValue = <span class="fn">pop</span>(valueStack);   <span class="
 
   <h2><span class="dot" style="background:var(--recon)"></span>定向传播:为什么能绕过 memo / bailout</h2>
   <p>组件调用 <code>useContext(ctx)</code> 时,除了读值,还会把<b>当前 fiber 登记到该 context 的依赖上</b>。当 Provider 的 value 变化(<code>Object.is</code> 判不等),reconciler 执行 <code>propagateContextChange</code>:<b>从 Provider 向下深度遍历子树,凡是登记了该 context 的 fiber,直接给它标记一个更新 lane</b> —— 即使这条路径上有组件本可以 bailout(memo/props 没变),也会因为「有 context 依赖的待更新」而<b>被强制往下走到消费者</b>。这就是「Context 变化穿透 memo」的源码真相。</p>
+  <h2><span class="dot" style="background:var(--fiber)"></span>readContext 怎样登记依赖</h2>
+  <p>Render 开始时 React 准备当前正在读取 Context 的 Fiber。每次 <code>readContext(context)</code> 读取当前值，同时创建依赖项并串到 <code>fiber.dependencies</code>。因此依赖关系属于“这次 Render 实际读了什么”，不是全局订阅表，也不是 Provider 保存消费者数组。</p>
+  <pre><span class="cm">// 概念结构</span>
+fiber.dependencies = {
+  firstContext: { context: ThemeContext, memoizedValue: <span class="st">"dark"</span>, next: … }
+};</pre>
+  <p>Provider 新旧 value 用 <code>Object.is</code> 比较。若每次传入新的对象字面量，即使内部字段相同也会传播；用 <code>useMemo</code> 只能避免“值事实上没变却换引用”，不能让消费者按字段选择订阅。</p>
+  <h3>一个 Provider 更新的完整路径</h3>
+  <ol class="clean"><li>Provider beginWork 比较新旧 value。</li><li>向下寻找依赖该 Context 的 Fiber，并给消费者及祖先路径合并当前 render lane。</li><li>中间组件即使 props 相同，也不能把含有 childLanes 的整条路径剪掉。</li><li>消费者重新执行 <code>readContext</code> 得到新值；未读取该 Context 的兄弟仍可 bailout。</li></ol>
   <div class="callout warn"><b>性能启示(呼应<a class="xref" data-go="t27">第七层·高级模式与陷阱</a>):</b>正因为是「Provider 一变→所有消费者全更新」,才要<b>拆分 Context</b>(把频繁变和不常变的分开)、用 <code>useMemo</code> 稳定 value、或改用 <code>useSyncExternalStore</code>/状态库做<b>选择性订阅</b>(只让真正用到那块数据的组件更新)。</div>
   <div class="callout good"><b>本章小结：</b>Context 的值靠一个「值栈」在 Provider 进出时 push/pop;value 变化时 <code>propagateContextChange</code> 从 Provider 向下<b>定向</b>标记依赖该 context 的 fiber,穿透 bailout/memo。→ 下一章:<a class="xref" data-go="ref">补充·useRef</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t28">← 28</button><button class="act" data-go="ref">C2 · useRef 与 ref →</button></div>
@@ -3227,6 +3332,8 @@ context._currentValue = <span class="fn">pop</span>(valueStack);   <span class="
 
   <h2><span class="dot" style="background:var(--render)"></span>ref 属性:什么时候被赋值</h2>
   <p><code>&lt;div ref={myRef}&gt;</code> 里的 <code>myRef.current</code> 不是渲染时赋值的,而是在 <b>Commit 的 Layout 阶段</b>由 React 设置:<code>commitAttachRef</code> 把真实 DOM 赋给 <code>ref.current</code>;卸载或 ref 变化时先 <code>commitDetachRef</code> 置为 <code>null</code>。顺序是<b>先卸旧 ref(=null)、再挂新 ref</b>。所以在 <code>useLayoutEffect</code> 里能拿到 ref,在渲染函数体里拿到的还是上一次的(或 null)。</p>
+  <div class="phase-strip"><div><strong>Render</strong>比较新旧 ref，给 Fiber 标记 Ref flag；不碰 DOM。</div><div><strong>Mutation</strong>旧 ref 在删除或替换时被解除。</div><div><strong>Layout</strong>新 DOM/实例写入对象 ref 或传给回调 ref，然后布局 Effect 可读取。</div></div>
+  <div class="callout warn"><b>不要在 Render 中读写 ref.current 来决定 UI。</b>并发 Render 可能暂停或丢弃，Render 也必须保持纯。例外是可预测的惰性初始化模式；真正的 DOM 读写放在事件或 Layout Effect 中。</div>
 
   <h2><span class="dot" style="background:var(--sched)"></span>回调 ref / forwardRef / useImperativeHandle</h2>
   <ul class="clean">
@@ -3239,6 +3346,9 @@ context._currentValue = <span class="fn">pop</span>(valueStack);   <span class="
 <span class="fn">useImperativeHandle</span>(ref, () =&gt; ({
   focus(){ inputRef.current.<span class="fn">focus</span>(); }
 }), []);</pre>
+  <h3>回调 ref 为什么经常重复执行</h3>
+  <p>内联 <code>ref={node =&gt; ...}</code> 每次 Render 都产生新函数。React 会把它视为 ref 发生变化，先清理旧回调，再调用新回调。若回调里有昂贵逻辑，应使用稳定函数；但普通对象 ref 通常更直接。</p>
+  <table class="simple"><tr><th>需求</th><th>选择</th></tr><tr><td>值会影响页面显示</td><td><code>useState</code></td></tr><tr><td>跨 Render 保存但不驱动 UI</td><td><code>useRef</code></td></tr><tr><td>挂载后测量 DOM、同步布局</td><td>DOM ref + <code>useLayoutEffect</code></td></tr><tr><td>对子组件暴露少量命令</td><td><code>useImperativeHandle</code></td></tr></table>
   <div class="callout good"><b>本章小结：</b>useRef 存一个 {current} 对象、每次渲染返回同一个(改它不重渲染);ref 在 commit 的 layout 阶段赋值;React 19 起 ref 可直接作 prop。→ 最后:<a class="xref" data-go="main">更新流程总览</a>,把整条线串起来。</div>
   <div class="navbtns"><button class="ghost" data-go="ctx">← C1</button><button class="act" data-go="main">★ 更新流程总览 →</button></div>
 </section>

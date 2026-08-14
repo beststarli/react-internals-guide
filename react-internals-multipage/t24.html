@@ -84,6 +84,8 @@
   <span class="kw">const</span> comments = <span class="fn">use</span>(commentsPromise);  <span class="cm">// 未就绪 → 抛出挂起,由 Suspense 接住</span>
   <span class="kw">return</span> comments.<span class="fn">map</span>(c =&gt; &lt;p&gt;{c.text}&lt;/p&gt;);
 }</pre>
+  <p>Promise pending 时，<code>use</code> 让当前组件挂起；fulfilled 时返回结果；rejected 时把错误交给最近的 Error Boundary。它可以条件调用，但仍只能在组件或自定义 Hook 的 Render 中使用。</p>
+  <div class="callout warn"><b>资源身份必须稳定。</b>如果客户端每次 Render 都新建 Promise，重试时会得到另一个未完成资源，造成重复请求甚至持续挂起。Promise 通常由框架、缓存层或 Server Component 创建后传入。</div>
 
   <h2><span class="dot" style="background:var(--recon)"></span>Actions 与表单</h2>
   <ul class="clean">
@@ -97,6 +99,8 @@
   <span class="fn">addOptimistic</span>(newMsg);        <span class="cm">// UI 立刻显示(乐观)</span>
   <span class="kw">await</span> <span class="fn">sendToServer</span>(formData);   <span class="cm">// 真正提交;失败则自动回滚</span>
 }</pre>
+  <p>Action 把异步提交放进过渡语义：React 能统一管理 pending、错误以及提交完成后的状态衔接。乐观值不是直接覆盖服务端事实，而是 pending 期间叠加的一层临时视图；成功后真实结果接管，失败时该层撤销。</p>
+  <table class="simple"><tr><th>API</th><th>负责的问题</th><th>放置位置</th></tr><tr><td><code>useActionState</code></td><td>Action 返回值、错误与 pending</td><td>拥有提交逻辑的组件</td></tr><tr><td><code>useFormStatus</code></td><td>读取最近父 form 的提交状态</td><td>form 内部的按钮/提示子组件</td></tr><tr><td><code>useOptimistic</code></td><td>真实结果返回前的临时状态</td><td>需要即时反馈的列表或详情</td></tr></table>
 
   <h2><span class="dot" style="background:var(--sched)"></span>其它易忽略的改进</h2>
   <ul class="clean">

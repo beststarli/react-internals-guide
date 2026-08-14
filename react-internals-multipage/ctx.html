@@ -103,6 +103,15 @@ context._currentValue = <span class="fn">pop</span>(valueStack);   <span class="
 
   <h2><span class="dot" style="background:var(--recon)"></span>定向传播:为什么能绕过 memo / bailout</h2>
   <p>组件调用 <code>useContext(ctx)</code> 时,除了读值,还会把<b>当前 fiber 登记到该 context 的依赖上</b>。当 Provider 的 value 变化(<code>Object.is</code> 判不等),reconciler 执行 <code>propagateContextChange</code>:<b>从 Provider 向下深度遍历子树,凡是登记了该 context 的 fiber,直接给它标记一个更新 lane</b> —— 即使这条路径上有组件本可以 bailout(memo/props 没变),也会因为「有 context 依赖的待更新」而<b>被强制往下走到消费者</b>。这就是「Context 变化穿透 memo」的源码真相。</p>
+  <h2><span class="dot" style="background:var(--fiber)"></span>readContext 怎样登记依赖</h2>
+  <p>Render 开始时 React 准备当前正在读取 Context 的 Fiber。每次 <code>readContext(context)</code> 读取当前值，同时创建依赖项并串到 <code>fiber.dependencies</code>。因此依赖关系属于“这次 Render 实际读了什么”，不是全局订阅表，也不是 Provider 保存消费者数组。</p>
+  <pre><span class="cm">// 概念结构</span>
+fiber.dependencies = {
+  firstContext: { context: ThemeContext, memoizedValue: <span class="st">"dark"</span>, next: … }
+};</pre>
+  <p>Provider 新旧 value 用 <code>Object.is</code> 比较。若每次传入新的对象字面量，即使内部字段相同也会传播；用 <code>useMemo</code> 只能避免“值事实上没变却换引用”，不能让消费者按字段选择订阅。</p>
+  <h3>一个 Provider 更新的完整路径</h3>
+  <ol class="clean"><li>Provider beginWork 比较新旧 value。</li><li>向下寻找依赖该 Context 的 Fiber，并给消费者及祖先路径合并当前 render lane。</li><li>中间组件即使 props 相同，也不能把含有 childLanes 的整条路径剪掉。</li><li>消费者重新执行 <code>readContext</code> 得到新值；未读取该 Context 的兄弟仍可 bailout。</li></ol>
   <div class="callout warn"><b>性能启示(呼应<a class="xref" data-go="t27">第七层·高级模式与陷阱</a>):</b>正因为是「Provider 一变→所有消费者全更新」,才要<b>拆分 Context</b>(把频繁变和不常变的分开)、用 <code>useMemo</code> 稳定 value、或改用 <code>useSyncExternalStore</code>/状态库做<b>选择性订阅</b>(只让真正用到那块数据的组件更新)。</div>
   <div class="callout good"><b>本章小结：</b>Context 的值靠一个「值栈」在 Provider 进出时 push/pop;value 变化时 <code>propagateContextChange</code> 从 Provider 向下<b>定向</b>标记依赖该 context 的 fiber,穿透 bailout/memo。→ 下一章:<a class="xref" data-go="ref">补充·useRef</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t28">← 28性能诊断与工程化</button><button class="act" data-go="ref">C2useRef 与 ref 体系 →</button></div>

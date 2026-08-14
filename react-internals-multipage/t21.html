@@ -77,6 +77,22 @@
     <p style="margin:8px 0 0"><b>本节内容：</b>从更新队列、闭包、key 和批处理机制解释四种常见问题。</p>
     <p style="margin:6px 0 0">本章包括：<b>setState 为何时同步时异步、多次 setState 为何合并、useTransition 为何能解卡顿、useEffect 依赖写错为何死循环</b>。</p>
   </div>
+  <h2><span class="dot" style="background:var(--accent)"></span>总模型：每次 Render 都是一张状态快照</h2>
+  <p>函数组件每执行一次，就产生一组属于这次 Render 的 props、state、局部变量和事件处理器。旧处理器闭包不会自动改写为新值；setState 只是把 Update 放进队列，也不会修改当前这张快照。</p>
+  <pre><span class="fn">setCount</span>(count + 1);
+<span class="fn">setCount</span>(count + 1); <span class="cm">// 两行都读取同一张快照里的 count</span>
+
+<span class="fn">setCount</span>(c =&gt; c + 1);
+<span class="fn">setCount</span>(c =&gt; c + 1); <span class="cm">// updater 按队列顺序消费前一次结果</span></pre>
+  <h3>四类常见 bug 对应哪条底层规则</h3>
+  <table class="simple">
+    <tr><th>现象</th><th>根因</th><th>修复方向</th></tr>
+    <tr><td>定时器总读到旧 state</td><td>回调闭包属于旧 Render</td><td>写全依赖、函数式更新，或用 ref 保存非 UI 最新值</td></tr>
+    <tr><td>列表输入框内容串行</td><td>用 index key 导致 Fiber 身份跟位置绑定</td><td>使用数据本身稳定且唯一的 id</td></tr>
+    <tr><td>Effect 无限循环</td><td>Effect 更新了自己的不稳定依赖</td><td>移除不必要 Effect，稳定依赖或改为事件驱动</td></tr>
+    <tr><td>修改对象后界面不更新</td><td>引用未变，React 的 Object.is/浅比较无法观察内部突变</td><td>创建新对象，并只复制发生变化的路径</td></tr>
+  </table>
+  <div class="callout"><b>key 不是给 DOM 用的。</b>它和 element type 一起决定 Fiber 身份。身份稳定，state 才跟着正确的数据项走；key 改变则意味着卸载旧 Fiber、挂载新 Fiber，内部 state 和 Effect 都会重置。</div>
   <h3>为什么 setState 有时同步、有时异步?</h3>
   <p>setState 本身<b>从不真正同步更新 state</b>——它总是<b>异步批处理</b>。所谓"同步"的错觉:在 React 16/17 的<b>事件回调</b>里,setState 后立即读 <code>this.state</code>/state 变量拿到的是<b>旧值</b>(还没渲染);而在 <code>setTimeout</code> 里(16/17 不批处理)每次 setState 会各自触发一次渲染,看起来"立即生效"。React 18 全局自动批处理后行为统一。要立即拿新值:<code>flushSync</code> 或 useReducer/函数式更新。</p>
   <h3>为什么多次 setState 会合并?</h3>

@@ -88,6 +88,9 @@
   store.getSnapshot,    <span class="cm">// 读当前值(React 会用它校验一致性)</span>
   store.getServerSnapshot <span class="cm">// SSR 时的值(可选)</span>
 );</pre>
+  <h3>这个 Hook 要求 store 遵守什么契约</h3>
+  <ul class="clean"><li><code>getSnapshot()</code> 在 store 未变化时必须返回 Object.is 相等的值；若每次创建新对象，React 会认为数据一直在变。</li><li><code>subscribe(listener)</code> 必须返回取消订阅函数，并尽量保持函数引用稳定。</li><li>SSR 时应提供 <code>getServerSnapshot</code>，且客户端 hydration 首次读取要与服务端序列化值一致。</li></ul>
+  <p>非阻塞 Render 前后，React 会再次读取快照。如果外部 store 在中途变化，React 会放弃可能不一致的结果并同步重试，确保一个 Commit 对应同一版本的数据。</p>
   <div class="callout"><b>问题来源：</b>渲染可以中断，而外部数据可能在中断期间发生变化。<code>useSyncExternalStore</code> 提供统一的订阅和快照读取方式，使 React 能检测变化并保持不同组件读取结果的一致性。</div>
   <div class="callout good"><b>本章小结：</b>并发可中断 → 渲染途中外部数据变了 → 同一帧不同组件读到不同值 = 撕裂;<code>useSyncExternalStore</code> 检测到就退回同步渲染保证一致;现代状态库内部都用它。→ 下一章:<a class="xref" data-go="t26">第七层·React Compiler</a>。</div>
   <div class="navbtns"><button class="ghost" data-go="t24">← 24React 19 新特性</button><button class="act" data-go="t26">26React Compiler →</button></div>

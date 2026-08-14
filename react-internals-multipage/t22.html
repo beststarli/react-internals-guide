@@ -80,18 +80,22 @@
 
   <h2><span class="dot" style="background:var(--accent)"></span>Hydration(注水/激活)</h2>
   <p>服务器发来的 HTML 是「死」的(没有事件、没有 state)。<b>Hydration</b> 是客户端 React <b>复用</b>这些已有 DOM、给它们绑定事件、挂上 Fiber/state,让它「活」过来的过程。关键:<b>不重新创建 DOM,只是附着</b>。</p>
+  <div class="phase-strip"><div><strong>服务端 Render</strong>组件输出 HTML，浏览器先展示内容。</div><div><strong>客户端 Hydrate</strong>构建 Fiber，与已有 DOM 对齐并绑定行为。</div><div><strong>后续更新</strong>重新接回 Lane → Render → Commit 主线。</div></div>
   <pre><span class="cm">// 客户端:hydrateRoot 而非 createRoot</span>
 <span class="kw">import</span> { hydrateRoot } <span class="kw">from</span> <span class="st">'react-dom/client'</span>;
 <span class="fn">hydrateRoot</span>(document.getElementById(<span class="st">'root'</span>), &lt;App/&gt;);
 <span class="cm">// 服务端</span>
 <span class="kw">import</span> { renderToPipeableStream } <span class="kw">from</span> <span class="st">'react-dom/server'</span>;</pre>
   <div class="callout warn"><b>Hydration 不匹配(mismatch):</b>若服务端渲染的 HTML 与客户端首次渲染结果不一致(如用了 <code>Date.now()</code>、<code>window</code>、随机数),React 会警告并可能丢弃服务端 HTML 重新渲染,首屏优势尽失。用 <code>useEffect</code> 里读浏览器专属值、或 <code>useId</code> 保证 id 一致来避免。</div>
+  <p>本质上，客户端第一次 Render 是在给已有 DOM “认领身份”。时间、随机数、无效 HTML 嵌套、浏览器专属分支或两端数据版本不同，都会使 element/Fiber 与 DOM 无法可靠对齐。文本差异可能被修复，结构差异则可能让整段子树退回客户端重建。</p>
 
   <h2><span class="dot" style="background:var(--recon)"></span>React 18 两大 SSR 升级:流式 + 选择性 Hydration</h2>
   <ul class="clean">
     <li><b>Streaming SSR(流式渲染):</b><code>renderToPipeableStream</code> 边渲染边把 HTML <b>分块</b>发给浏览器,不必等整页渲染完。慢的部分(数据未就绪)用 <code>&lt;Suspense&gt;</code> 包住先发 fallback,数据好了再流式补发那一块 HTML + 内联脚本替换。</li>
     <li><b>Selective Hydration(选择性注水):</b>不必等整棵树的 JS 都加载完才能交互。React 按 <code>Suspense</code> 边界<b>分块注水</b>,而且<b>用户点击哪块就优先注水哪块</b>(利用并发的 Lane 优先级)。这就是 SSR 与并发架构的结合点。</li>
   </ul>
+  <table class="simple"><tr><th>阶段</th><th>用户看到什么</th><th>React 在做什么</th></tr><tr><td>Shell 到达</td><td>页面骨架与 fallback</td><td>浏览器提前解析、绘制、下载资源</td></tr><tr><td>边界流入</td><td>真实内容逐块替换 fallback</td><td>服务端按 Suspense 边界完成顺序发送片段</td></tr><tr><td>JS 到达</td><td>局部区域逐步可交互</td><td>客户端按边界及交互优先级 hydrate</td></tr></table>
+  <div class="callout warn"><b>SSR 不等于减少总工作。</b>服务端要 Render，客户端通常仍要 Hydrate。它优化的是首屏关键路径与用户感知；边界、数据和 bundle 切分不合理时，甚至可能增加服务器成本与 hydration 长任务。</div>
   <div class="card" style="text-align:center">
     <svg viewBox="0 0 720 150" style="width:100%;height:auto">
       <g font-family="monospace" font-size="11">

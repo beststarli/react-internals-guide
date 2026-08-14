@@ -12,7 +12,7 @@
 > ⭐ 如果这个项目帮助你理解了 React 原理，欢迎点击右上角的 **Star**。你的支持会帮助更多学习者发现这份教程，也会鼓励我继续完善后续章节。
 
 ## 直接访问链接
-[React原理全景](https://zhaoyinger623.github.io/react-internals-guide/01-foundations/intro.html)
+[React原理全景](https://react-internals-guide.vercel.app/01-foundations/intro.html)
 
 ## 环境要求
 

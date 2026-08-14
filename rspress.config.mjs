@@ -16,7 +16,7 @@ export default defineConfig({
   llms: true,
   themeConfig: {
     socialLinks: [
-      { icon: 'github', mode: 'link', content: 'https://github.com/zhaoyinger623/react-internals-guide' },
+      { icon: 'github', mode: 'link', content: 'https://github.com/beststarli/react-internals-guide' },
     ],
     footer: { message: '以一次状态更新为主线，建立可用于阅读源码的 React 心智模型。' },
   },
